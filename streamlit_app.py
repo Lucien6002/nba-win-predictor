@@ -41,8 +41,14 @@ def load_model(feature_cols: list[str]) -> Pipeline:
 def get_latest_team_features() -> pd.DataFrame:
     df = pd.read_csv(FEATURES_PATH, parse_dates=["game_date"])
 
-    home_cols = [col for col in df.columns if col.endswith("_home")]
-    away_cols = [col for col in df.columns if col.endswith("_away")]
+    exclude_home = {"team_id_home"}
+    exclude_away = {"team_id_away"}
+    home_cols = [
+        col for col in df.columns if col.endswith("_home") and col not in exclude_home
+    ]
+    away_cols = [
+        col for col in df.columns if col.endswith("_away") and col not in exclude_away
+    ]
     home_map = {col: col[:-5] for col in home_cols}
     away_map = {col: col[:-5] for col in away_cols}
 
