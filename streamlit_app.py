@@ -8,13 +8,6 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from test_data import (
-    add_elo_features,
-    add_rolling_features,
-    build_long_table,
-)
-
-DATA_RAW = Path("data/raw")
 DATA_PROCESSED = Path("data/processed")
 FEATURES_PATH = DATA_PROCESSED / "features_game.csv"
 
@@ -46,41 +39,34 @@ def load_model(feature_cols: list[str]) -> Pipeline:
 
 
 def get_latest_team_features() -> pd.DataFrame:
-    games = pd.read_csv(DATA_RAW / "game.csv")
-    games["game_date"] = pd.to_datetime(games["game_date"], errors="coerce")
-    games = games.dropna(subset=["game_date"])
+    df = pd.read_csv(FEATURES_PATH, parse_dates=["game_date"])
 
-    base_stats = [
-        "pts",
-        "reb",
-        "ast",
-        "tov",
-        "fg_pct",
-        "fg3_pct",
-        "ft_pct",
-        "oreb",
-        "dreb",
-        "fgm",
-        "fga",
-        "fg3m",
-        "fg3a",
-        "ftm",
-        "fta",
-        "stl",
-        "blk",
-        "pf",
-    ]
-    base_stats = [
-        stat
-        for stat in base_stats
-        if f"{stat}_home" in games.columns and f"{stat}_away" in games.columns
-    ]
+    home_cols = [col for col in df.columns if col.endswith("_home")]
+    away_cols = [col for col in df.columns if col.endswith("_away")]
+    home_map = {col: col[:-5] for col in home_cols}
+    away_map = {col: col[:-5] for col in away_cols}
 
-    games = add_elo_features(games)
-    extra_cols = [("elo_home_pre", "elo_away_pre", "elo_pre")]
-    long_df = build_long_table(games, base_stats, extra_cols=extra_cols)
-    long_df = add_rolling_features(long_df, base_stats)
+    home_df = df[["game_id", "game_date", "team_id_home", "team_id_away"] + home_cols].copy()
+    home_df = home_df.rename(
+        columns={
+            "team_id_home": "team_id",
+            "team_id_away": "opponent_id",
+            **home_map,
+        }
+    )
+    home_df["is_home"] = 1
 
+    away_df = df[["game_id", "game_date", "team_id_away", "team_id_home"] + away_cols].copy()
+    away_df = away_df.rename(
+        columns={
+            "team_id_away": "team_id",
+            "team_id_home": "opponent_id",
+            **away_map,
+        }
+    )
+    away_df["is_home"] = 0
+
+    long_df = pd.concat([home_df, away_df], ignore_index=True)
     long_df = long_df.sort_values(["team_id", "game_date", "game_id"])
     latest = long_df.groupby("team_id").tail(1)
     return latest
@@ -104,15 +90,8 @@ st.title("NBA Win Predictor")
 st.write("Select two teams to estimate the home win probability.")
 
 latest = get_latest_team_features()
-team_lookup = (
-    latest[["team_id", "opponent_id"]]
-    .assign(team_id=latest["team_id"].astype(int))
-    .drop_duplicates()
-)
-
 teams = latest[["team_id"]].drop_duplicates()
 team_ids = teams["team_id"].astype(int).tolist()
-team_labels = [str(team_id) for team_id in team_ids]
 
 home_team_id = st.selectbox("Home team", team_ids, format_func=lambda x: str(x))
 away_team_id = st.selectbox("Away team", team_ids, format_func=lambda x: str(x))
@@ -124,7 +103,9 @@ if home_team_id == away_team_id:
 home_row = latest.loc[latest["team_id"] == home_team_id].iloc[0]
 away_row = latest.loc[latest["team_id"] == away_team_id].iloc[0]
 
-feature_cols = [col for col in pd.read_csv(FEATURES_PATH, nrows=1).columns if col.startswith("diff_")]
+feature_cols = [
+    col for col in pd.read_csv(FEATURES_PATH, nrows=1).columns if col.startswith("diff_")
+]
 model = load_model(feature_cols)
 match_features = build_matchup_features(home_row, away_row, feature_cols)
 proba = model.predict_proba(match_features)[0][1]
